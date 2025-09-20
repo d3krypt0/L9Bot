@@ -23,5 +23,11 @@
     "undomiel": { "interval": 24, "schedule": null },
     "venatus": { "interval": 10, "schedule": null },
     "viorent": { "interval": 10, "schedule": null },
-    "wannitas": { "interval": 48, "schedule": null }
+    "wannitas": { "interval": 48, "schedule": null },
+    "catena": { "interval": 35, "schedule": null },
+    "auraq": { "interval": null, "schedule": ["Sunday 21:00", "Wednesday 21:00"] },
+    "secreta": { "interval": 62, "schedule": null },
+    "ordo": { "interval": 62, "schedule": null },
+    "supore": { "interval": 62, "schedule": null },
+    "chaiflock": { "interval": null, "schedule": ["Saturday 22:00"] }
 }
