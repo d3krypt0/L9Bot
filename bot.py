@@ -66,6 +66,19 @@ if not TOKEN:
     raise ValueError("❌ DISCORD_TOKEN environment variable not set. Please configure it in Railway.")
 
 # ==============================
+# BOT RESTART
+# ==============================
+@bot.event
+async def on_ready():
+    print(f"✅ Bot is online as {bot.user} and connected to {len(bot.guilds)} server(s).")
+
+    # Send a message in your chosen channel
+    channel = bot.get_channel(CHANNEL_ID)  # same channel you use for respawn alerts
+    if channel:
+        await channel.send(f"🔄 Bot restarted and is now online as **{bot.user}**")
+
+
+# ==============================
 # Load boss data
 # ==============================
 with open(BOSS_FILE, "r") as f:
