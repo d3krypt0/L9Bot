@@ -130,15 +130,15 @@ async def on_ready():
 
 
 # ===========================
-# LIST COMMAND
+# LIST BOSS COMMAND
 # ===========================
-@bot.command()
+@bot.command(name="boss")
 async def list(ctx, option: str = None):
     """
     Show respawn timers in an easy-to-read format.
     Usage:
-      !list          → Show all respawns sorted by time
-      !list soon     → Show next 5 respawns only
+      !boss          → Show all respawns sorted by time
+      !boss soon     → Show next 5 respawns only
     """
     with_timers = []
     without_timers = []
@@ -171,7 +171,7 @@ async def list(ctx, option: str = None):
             f"**{ph_time.strftime('%I:%M %p').lstrip('0').lower()}** — {boss.capitalize()} *(in {countdown})*"
         )
 
-    # Show fixed or no-info bosses at the bottom (only in !list, not !list soon)
+    # Show fixed or no-info bosses at the bottom (only in !boss, not !boss soon)
     if not option or option.lower() != "soon":
         lines.append("\n**📌 Fixed / No Info Bosses:**")
         for boss, data in without_timers:
@@ -554,7 +554,7 @@ async def commands_list(ctx):
          "6:51 pm - Wannitas"),
         ("!up <bulk input>", 
          "Set next spawn times for one or multiple bosses. Overwrites existing timers. Supports bulk input."),
-        ("!list [soon]", 
+        ("!boss [soon]", 
          "Show respawn timers. 'soon' shows next 5 respawns only."),
         ("!next <boss>", 
          "Show next respawn time and countdown for a specific boss."),
