@@ -221,7 +221,7 @@ async def next(ctx, *, boss: str = None):
 @bot.command(name="dead")
 async def dead(ctx, *, args: str = None):
     """
-    Log a boss death at the current time.
+    Log a boss death at the current time or a provided time.
     Usage:
       !dead <boss name>                (records death as now)
       !dead <boss name> <HH:MM> [AM/PM]  (records death at specific time today)
@@ -232,22 +232,16 @@ async def dead(ctx, *, args: str = None):
         return
 
     parts = args.strip().split()
-    if len(parts) < 1:
-        await ctx.send("❌ Please provide a boss name.")
-        return
-
-    # Try to parse optional date
     killed_date = date.today()
     time_str = None
     boss_name_parts = []
 
+    # detect time and date
     if len(parts) >= 2:
-        # Case: last 2 parts are "HH:MM AM/PM"
         if parts[-1].upper() in ["AM", "PM"]:
             time_str = parts[-2] + " " + parts[-1]
             boss_name_parts = parts[:-2]
         else:
-            # Case: last part is "HH:MM"
             try:
                 datetime.strptime(parts[-1], "%H:%M")
                 time_str = parts[-1]
@@ -255,7 +249,6 @@ async def dead(ctx, *, args: str = None):
             except ValueError:
                 boss_name_parts = parts
 
-    # Check if second-to-last was a date
     if len(parts) >= 3:
         try:
             killed_date = datetime.strptime(parts[-2], "%Y-%m-%d").date()
@@ -273,7 +266,7 @@ async def dead(ctx, *, args: str = None):
         await ctx.send(f"❌ Unknown boss: {boss}")
         return
 
-    # Default: current time if no time provided
+    # parse time
     if not time_str:
         killed_time = datetime.now(timezone.utc)
     else:
@@ -285,17 +278,28 @@ async def dead(ctx, *, args: str = None):
         except ValueError:
             await ctx.send("❌ Invalid time format. Use HH:MM or HH:MM AM/PM.")
             return
-        killed_time = datetime.combine(killed_date, time_obj).replace(tzinfo=timezone.utc)
+        killed_time = ph_tz.localize(datetime.combine(killed_date, time_obj)).astimezone(timezone.utc)
 
-    respawn_time = killed_time + timedelta(hours=BOSSES[boss]["interval"])
-    respawn_schedule[boss] = respawn_time
-    save_respawn_data()
-    asyncio.create_task(announce_boss(boss, respawn_time))
+    # check boss type
+    boss_data = BOSSES[boss]
+    interval = boss_data.get("interval")
+    schedule = boss_data.get("schedule")
 
-    await ctx.send(
-        f"✅ {boss.capitalize()} marked as dead at {format_time(killed_time)} PH "
-        f"→ Respawns at {format_time(respawn_time)} PH"
-    )
+    if interval:
+        respawn_time = killed_time + timedelta(hours=interval)
+        respawn_schedule[boss] = respawn_time
+        save_respawn_data()
+        asyncio.create_task(announce_boss(boss, respawn_time))
+        await ctx.send(
+            f"✅ {boss.capitalize()} marked as dead at {format_time(killed_time)} PH "
+            f"→ Respawns at {format_time(respawn_time)} PH"
+        )
+    elif schedule:
+        await ctx.send(
+            f"📌 **{boss.capitalize()}** is a fixed-schedule boss.\n🗓️ Schedule: {', '.join(schedule)}"
+        )
+    else:
+        await ctx.send(f"❌ No respawn info for **{boss.capitalize()}**")
 
 
 # ===========================
@@ -303,6 +307,15 @@ async def dead(ctx, *, args: str = None):
 # ===========================
 @bot.command(name="deadat")
 async def deadat(ctx, *, args: str = None):
+    """
+    Bulk log boss deaths at specific PH times with optional date headers.
+    Example:
+      !deadat
+      September 19
+      17:01 - Undomiel
+      17:07 - Livera
+      6:51 pm - Wannitas
+    """
     if not args:
         await ctx.send("❌ Usage: bulk input or !deadat <boss> <HH:MM> [AM/PM] [YYYY-MM-DD]")
         return
@@ -329,7 +342,7 @@ async def deadat(ctx, *, args: str = None):
         return None
 
     for line in lines:
-        # Date header
+        # Date header like "September 19"
         try:
             parsed_date = datetime.strptime(line.title(), "%B %d").date().replace(year=date.today().year)
             current_date = parsed_date
@@ -355,34 +368,30 @@ async def deadat(ctx, *, args: str = None):
             results.append(f"❌ Invalid time for `{boss_key}`: `{time_str}`")
             continue
 
-        # Localize PH time
-        killed_time = ph_tz.localize(datetime.combine(current_date, time_obj))
+        killed_ph = ph_tz.localize(datetime.combine(current_date, time_obj))
+        killed_time = killed_ph.astimezone(timezone.utc)
 
-        interval = BOSSES[boss_key].get("interval")
-if interval is None:
-    schedule = BOSSES[boss_key].get("schedule")
-    if schedule:
-        results.append(
-            f"🗓️ {boss_key.capitalize()} has a fixed schedule: {', '.join(schedule)}"
-        )
-    else:
-        results.append(
-            f"❌ {boss_key.capitalize()} has no respawn interval or fixed schedule configured."
-        )
-    continue
+        boss_data = BOSSES[boss_key]
+        interval = boss_data.get("interval")
+        schedule = boss_data.get("schedule")
 
-
-        respawn_time = killed_time + timedelta(hours=interval)
-        respawn_schedule[boss_key] = respawn_time
-        save_respawn_data()
-
-        # Call unified announce_boss
-        asyncio.create_task(announce_boss(boss_key, respawn_time))
-
-        results.append(f"✅ {boss_key.capitalize()} marked dead → Respawns at {respawn_time.strftime('%Y-%m-%d %I:%M %p PH')}")
+        if interval:
+            respawn_time = killed_time + timedelta(hours=interval)
+            respawn_schedule[boss_key] = respawn_time
+            save_respawn_data()
+            asyncio.create_task(announce_boss(boss_key, respawn_time))
+            results.append(
+                f"✅ {boss_key.capitalize()} marked dead → Respawns at {respawn_time.astimezone(ph_tz).strftime('%Y-%m-%d %I:%M %p PH')}"
+            )
+        elif schedule:
+            results.append(
+                f"📌 {boss_key.capitalize()} is a fixed-schedule boss. Schedule: {', '.join(schedule)}"
+            )
+        else:
+            results.append(f"❌ {boss_key.capitalize()} has no respawn data.")
 
     await ctx.send("\n".join(results) if results else "❌ No valid entries found.")
-
+    
 
 # ===========================
 # UP COMMAND
@@ -422,7 +431,6 @@ async def up(ctx, *, args: str = None):
     lines = [ln.strip() for ln in args.splitlines() if ln.strip()]
     results = []
 
-    # --- Helpers ---
     def parse_time_str(s):
         s_clean = s.strip().upper().replace(".", "")
         try:
@@ -440,12 +448,11 @@ async def up(ctx, *, args: str = None):
                 return b
         return None
 
-    # --- Detect if this is single-line mode ---
+    # --- Single-line mode ---
     if len(lines) == 1 and "-" not in lines[0]:
         parts = lines[0].split()
         respawn_date = None
 
-        # optional YYYY-MM-DD
         if parts and re.match(r'^\d{4}-\d{2}-\d{2}$', parts[-1]):
             try:
                 respawn_date = datetime.strptime(parts[-1], "%Y-%m-%d").date()
@@ -453,7 +460,6 @@ async def up(ctx, *, args: str = None):
             except ValueError:
                 respawn_date = None
 
-        # detect time token
         time_token = None
         if len(parts) >= 2 and parts[-1].upper() in ("AM", "PM"):
             time_token = parts[-2] + " " + parts[-1]
@@ -482,33 +488,31 @@ async def up(ctx, *, args: str = None):
         ph_dt = ph_tz.localize(datetime.combine(respawn_date, time_obj))
         respawn_utc = ph_dt.astimezone(pytz.UTC)
 
-        respawn_schedule[boss_key] = respawn_utc
-        save_respawn_data()
-        asyncio.create_task(announce_boss(boss_key, respawn_utc))
+        boss_info = BOSSES[boss_key]
+        interval = boss_info.get("interval")
+        schedule = boss_info.get("schedule")
 
-        await ctx.send(f"✅ Next spawn for **{boss_key.capitalize()}** set to {ph_dt.strftime('%Y-%m-%d %I:%M %p PH')} (overwritten)")
+        if interval:
+            respawn_schedule[boss_key] = respawn_utc
+            save_respawn_data()
+            asyncio.create_task(announce_boss(boss_key, respawn_utc))
+            await ctx.send(f"✅ Next spawn for **{boss_key.capitalize()}** set to {ph_dt.strftime('%Y-%m-%d %I:%M %p PH')} (overwritten)")
+        elif schedule:
+            await ctx.send(f"📌 {boss_key.capitalize()} is a fixed-schedule boss. Schedule: {', '.join(schedule)}")
+        else:
+            await ctx.send(f"❌ {boss_key.capitalize()} has no respawn interval or fixed schedule configured.")
         return
 
     # --- Bulk mode ---
     current_date = date.today()
     for line in lines:
-        # Check for date headers
-        parsed_date = None
         try:
             parsed_date = datetime.strptime(line.title(), "%B %d").date().replace(year=date.today().year)
-        except ValueError:
-            try:
-                day_only = int(line)
-                today = date.today()
-                parsed_date = today.replace(day=day_only)
-            except Exception:
-                parsed_date = None
-
-        if parsed_date:
             current_date = parsed_date
             continue
+        except ValueError:
+            pass
 
-        # Match "<time> - <boss>"
         match = re.match(r"^([0-9]{1,2}:[0-9]{2}\s*(?:AM|PM|am|pm)?)\s*-\s*(.+)$", line)
         if not match:
             results.append(f"⚠️ Could not parse line: `{line}`")
@@ -530,14 +534,21 @@ async def up(ctx, *, args: str = None):
         ph_dt = ph_tz.localize(datetime.combine(current_date, time_obj))
         respawn_utc = ph_dt.astimezone(pytz.UTC)
 
-        respawn_schedule[boss_key] = respawn_utc
-        save_respawn_data()
-        asyncio.create_task(announce_boss(boss_key, respawn_utc))
+        boss_info = BOSSES[boss_key]
+        interval = boss_info.get("interval")
+        schedule = boss_info.get("schedule")
 
-        results.append(f"✅ {boss_key.capitalize()} set → {ph_dt.strftime('%Y-%m-%d %I:%M %p PH')}")
+        if interval:
+            respawn_schedule[boss_key] = respawn_utc
+            save_respawn_data()
+            asyncio.create_task(announce_boss(boss_key, respawn_utc))
+            results.append(f"✅ {boss_key.capitalize()} set → {ph_dt.strftime('%Y-%m-%d %I:%M %p PH')}")
+        elif schedule:
+            results.append(f"📌 {boss_key.capitalize()} is a fixed-schedule boss. Schedule: {', '.join(schedule)}")
+        else:
+            results.append(f"❌ {boss_key.capitalize()} has no respawn interval or fixed schedule configured.")
 
     await ctx.send("\n".join(results) if results else "❌ No valid entries found.")
-
 
 
 # ===========================
