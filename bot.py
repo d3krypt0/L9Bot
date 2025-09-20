@@ -359,9 +359,18 @@ async def deadat(ctx, *, args: str = None):
         killed_time = ph_tz.localize(datetime.combine(current_date, time_obj))
 
         interval = BOSSES[boss_key].get("interval")
-        if interval is None:
-            results.append(f"⚠️ {boss_key.capitalize()} has fixed schedule; death recorded at {killed_time.strftime('%Y-%m-%d %I:%M %p PH')}")
-            continue
+if interval is None:
+    schedule = BOSSES[boss_key].get("schedule")
+    if schedule:
+        results.append(
+            f"🗓️ {boss_key.capitalize()} has a fixed schedule: {', '.join(schedule)}"
+        )
+    else:
+        results.append(
+            f"❌ {boss_key.capitalize()} has no respawn interval or fixed schedule configured."
+        )
+    continue
+
 
         respawn_time = killed_time + timedelta(hours=interval)
         respawn_schedule[boss_key] = respawn_time
