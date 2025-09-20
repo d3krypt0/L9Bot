@@ -133,7 +133,7 @@ async def on_ready():
 # LIST BOSS COMMAND
 # ===========================
 @bot.command(name="boss")
-async def list(ctx, option: str = None):
+async def boss(ctx, option: str = None):
     """
     Show respawn timers in an easy-to-read format.
     Usage:
@@ -143,13 +143,22 @@ async def list(ctx, option: str = None):
     with_timers = []
     without_timers = []
 
+    now = datetime.utcnow().replace(tzinfo=timezone.utc)
+
     # Separate bosses with and without timers
     for boss, data in BOSSES.items():
         if boss in respawn_schedule:
             respawn_time = respawn_schedule[boss]
             if respawn_time.tzinfo is None:
                 respawn_time = respawn_time.replace(tzinfo=pytz.UTC)
-            with_timers.append((boss, respawn_time))
+
+            # ✅ Only include future respawns
+            if respawn_time > now:
+                with_timers.append((boss, respawn_time))
+            else:
+                # Clean up expired entries
+                del respawn_schedule[boss]
+                save_respawn_data()
         else:
             without_timers.append((boss, data))
 
@@ -391,7 +400,7 @@ async def deadat(ctx, *, args: str = None):
             results.append(f"❌ {boss_key.capitalize()} has no respawn data.")
 
     await ctx.send("\n".join(results) if results else "❌ No valid entries found.")
-    
+
 
 # ===========================
 # UP COMMAND
