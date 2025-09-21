@@ -138,10 +138,11 @@ async def boss(ctx, option: str = None):
     Show respawn timers in an easy-to-read format.
     Usage:
       !boss          → Show all respawns sorted by time
-      !boss soon     → Show next 5 respawns only
+      !boss soon     → Show next 5 respawns only (plus fixed bosses highlighted)
     """
     with_timers = []
-    without_timers = []
+    fixed_bosses = []
+    no_info_bosses = []
 
     now = datetime.utcnow().replace(tzinfo=timezone.utc)
 
@@ -160,7 +161,10 @@ async def boss(ctx, option: str = None):
                 del respawn_schedule[boss]
                 save_respawn_data()
         else:
-            without_timers.append((boss, data))
+            if data["schedule"]:
+                fixed_bosses.append((boss, data["schedule"]))
+            else:
+                no_info_bosses.append(boss)
 
     # Sort by respawn time (nearest first)
     with_timers.sort(key=lambda x: x[1])
@@ -173,25 +177,35 @@ async def boss(ctx, option: str = None):
     today_str = datetime.now(ph_tz).strftime("%B %d (%A)")
     lines = [f"**⚔️ Boss Respawn Timers — {today_str}**\n"]
 
-    for boss, respawn_time in with_timers:
-        ph_time = respawn_time.astimezone(ph_tz)
-        countdown = format_countdown(respawn_time)
-        lines.append(
-            f"**{ph_time.strftime('%I:%M %p').lstrip('0').lower()}** — {boss.capitalize()} *(in {countdown})*"
-        )
+    # Active respawn timers
+    if with_timers:
+        for boss, respawn_time in with_timers:
+            ph_time = respawn_time.astimezone(ph_tz)
+            countdown = format_countdown(respawn_time)
+            lines.append(
+                f"**{ph_time.strftime('%I:%M %p').lstrip('0').lower()}** — {boss.capitalize()} *(in {countdown})*"
+            )
+    else:
+        lines.append("✅ No active respawn timers.")
 
-    # Show fixed or no-info bosses at the bottom (only in !boss, not !boss soon)
+    # Always show fixed respawn bosses
+    if fixed_bosses:
+        if option and option.lower() == "soon":
+            lines.append("\n**⬇️ 📌 FIXED RESPAWN BOSSES BELOW ⬇️**")
+        else:
+            lines.append("\n**📌 Fixed Respawn Bosses:**")
+        for boss, schedule in fixed_bosses:
+            schedule_str = ", ".join(schedule)
+            lines.append(f"🗓️ {boss.capitalize()} — {schedule_str}")
+
+    # Only show no-info bosses in full list mode
     if not option or option.lower() != "soon":
-        lines.append("\n**📌 Fixed / No Info Bosses:**")
-        for boss, data in without_timers:
-            if data["schedule"]:
-                schedule = ", ".join(data["schedule"])
-                lines.append(f"🗓️ {boss.capitalize()} — Fixed: {schedule}")
-            else:
-                lines.append(f"❌ {boss.capitalize()} — No respawn data")
+        if no_info_bosses:
+            lines.append("\n**❌ No Info Bosses:**")
+            for boss in no_info_bosses:
+                lines.append(f"❌ {boss.capitalize()}")
 
     await ctx.send("\n".join(lines))
-
 
 # ===========================
 # NEXT COMMAND
@@ -241,7 +255,7 @@ async def dead(ctx, *, args: str = None):
         return
 
     parts = args.strip().split()
-    killed_date = date.today()
+    killed_date = datetime.now(ph_tz).date()
     time_str = None
     boss_name_parts = []
 
