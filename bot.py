@@ -77,7 +77,7 @@ def find_boss(query: str):
     return None
 
 def get_channels():
-    """Return a list of valid Discord channel objects."""
+    """Return a list of valid Discord channel objects with logging for debug."""
     raw_ids = CHANNEL_IDS
     channels = []
     for cid in raw_ids:
@@ -174,6 +174,21 @@ def schedule_boss(boss, respawn_time):
 # ==============================
 # Commands
 # ==============================
+@bot.command(name="testchannels")
+async def test_channels(ctx):
+    """
+    Sends a test message to all configured channels for debugging.
+    """
+    channels = get_channels()
+    if not channels:
+        await ctx.send("⚠️ No valid channels found.")
+        return
+
+    for channel in channels:
+        await channel.send(f"✅ Test message from bot in {channel.guild.name} → #{channel.name}")
+    
+    await ctx.send("📢 Test messages sent to all configured channels.")
+
 @bot.command(name="boss")
 async def boss(ctx, option: str = None):
     """List respawn timers and fixed bosses."""
