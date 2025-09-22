@@ -136,39 +136,48 @@ async def on_ready():
 # !dead COMMAND
 # ------------------------------
 @bot.command(name="dead")
-async def dead(ctx, boss: str, time: str = None):
+async def dead(ctx, boss: str, time: str = None, date_str: str = None):
     """
     Log a boss death.
-    Usage: !dead <boss> [time]
-    Example: !dead venatus 01:15 am
+    Usage:
+      !dead <boss> [time] [date]
+    Examples:
+      !dead venatus 01:15 am
+      !dead venatus 01:15 am September 22
     """
     boss_name = resolve_boss_name(boss)
     if not boss_name:
         await ctx.send(f"⚠️ Unknown boss: {boss}")
         return
 
-    # Use provided time or current time
+    # Default date = today PH
+    current_date = datetime.now(ph_tz).date()
+
+    # If user provided a date (like "September 22")
+    if date_str:
+        try:
+            parsed_date = datetime.strptime(date_str, "%B %d").date()
+            current_date = parsed_date.replace(year=datetime.now(ph_tz).year)
+        except ValueError:
+            await ctx.send(f"⚠️ Invalid date format: {date_str}")
+            return
+
+    # Use provided time or current PH time
     killed_time = datetime.now(ph_tz)
     if time:
-        try:
-            killed_time = datetime.strptime(time, "%I:%M %p").replace(
-                tzinfo=ph_tz,
-                year=killed_time.year,
-                month=killed_time.month,
-                day=killed_time.day,
-            )
-        except ValueError:
+        respawn_time = None
+        for fmt in ["%I:%M %p", "%H:%M"]:
             try:
-                killed_time = datetime.strptime(time, "%H:%M").replace(
-                    tzinfo=ph_tz,
-                    year=killed_time.year,
-                    month=killed_time.month,
-                    day=killed_time.day,
-                )
+                t = datetime.strptime(time, fmt).time()
+                killed_time = datetime.combine(current_date, t, tzinfo=ph_tz)
+                break
             except ValueError:
-                await ctx.send("⚠️ Invalid time format. Use HH:MM or HH:MM AM/PM.")
-                return
+                continue
+        if not respawn_time and not killed_time:
+            await ctx.send("⚠️ Invalid time format. Use HH:MM or HH:MM AM/PM.")
+            return
 
+    # Fixed schedule vs interval
     interval = BOSSES[boss_name]["interval"]
     if interval:
         respawn_time = killed_time + timedelta(hours=interval)
@@ -177,9 +186,9 @@ async def dead(ctx, boss: str, time: str = None):
         await ctx.send(f"✅ {boss_name.capitalize()} set → {respawn_time.strftime('%Y-%m-%d %I:%M %p')} PH")
         bot.loop.create_task(announce_boss(boss_name, respawn_schedule[boss_name]))
     else:
-        # Fixed schedule boss
         schedule = BOSSES[boss_name]["schedule"]
         await ctx.send(f"🗓️ {boss_name.capitalize()} is fixed spawn → {', '.join(schedule)}")
+
 
 # ------------------------------
 # !deadat COMMAND
@@ -188,40 +197,52 @@ async def dead(ctx, boss: str, time: str = None):
 async def deadat(ctx, *, bulk_input: str):
     """
     Log multiple boss deaths in one command.
+    Supports optional date line.
     Example:
-    !deadat
-    1:15 am - Gareth
-    2:24 am - Ego
+      !deadat
+      September 22
+      1:15 am - Gareth
+      2:24 am - Ego
     """
     lines = bulk_input.strip().split("\n")
+    current_date = datetime.now(ph_tz).date()
+
     for line in lines:
-        if "-" not in line:
+        line = line.strip()
+        if not line:
             continue
+
+        # Detect date line
+        try:
+            parsed_date = datetime.strptime(line, "%B %d").date()
+            current_date = parsed_date.replace(year=datetime.now(ph_tz).year)
+            continue
+        except ValueError:
+            pass
+
+        # Expect time - boss format
+        if "-" not in line:
+            await ctx.send(f"⚠️ Could not parse line: {line}")
+            continue
+
         time_str, boss = [x.strip() for x in line.split("-", 1)]
         boss_name = resolve_boss_name(boss)
         if not boss_name:
             await ctx.send(f"⚠️ Unknown boss: {boss}")
             continue
 
-        killed_time = datetime.now(ph_tz)
-        try:
-            killed_time = datetime.strptime(time_str, "%I:%M %p").replace(
-                tzinfo=ph_tz,
-                year=killed_time.year,
-                month=killed_time.month,
-                day=killed_time.day,
-            )
-        except ValueError:
+        killed_time = None
+        for fmt in ["%I:%M %p", "%H:%M"]:
             try:
-                killed_time = datetime.strptime(time_str, "%H:%M").replace(
-                    tzinfo=ph_tz,
-                    year=killed_time.year,
-                    month=killed_time.month,
-                    day=killed_time.day,
-                )
+                t = datetime.strptime(time_str, fmt).time()
+                killed_time = datetime.combine(current_date, t, tzinfo=ph_tz)
+                break
             except ValueError:
-                await ctx.send(f"⚠️ Invalid time: {time_str}")
                 continue
+
+        if not killed_time:
+            await ctx.send(f"⚠️ Invalid time: {time_str}")
+            continue
 
         interval = BOSSES[boss_name]["interval"]
         if interval:
@@ -241,39 +262,51 @@ async def deadat(ctx, *, bulk_input: str):
 async def up(ctx, *, bulk_input: str):
     """
     Manually set respawn times for bosses.
+    Supports optional date line.
     Usage:
-    !up
-    5:00 pm - Undomiel
-    6:00 pm - Livera
+      !up
+      September 22
+      5:00 pm - Undomiel
+      6:00 pm - Livera
     """
     lines = bulk_input.strip().split("\n")
+    current_date = datetime.now(ph_tz).date()
+
     for line in lines:
-        if "-" not in line:
+        line = line.strip()
+        if not line:
             continue
+
+        # Detect date line
+        try:
+            parsed_date = datetime.strptime(line, "%B %d").date()
+            current_date = parsed_date.replace(year=datetime.now(ph_tz).year)
+            continue
+        except ValueError:
+            pass
+
+        if "-" not in line:
+            await ctx.send(f"⚠️ Could not parse line: {line}")
+            continue
+
         time_str, boss = [x.strip() for x in line.split("-", 1)]
         boss_name = resolve_boss_name(boss)
         if not boss_name:
             await ctx.send(f"⚠️ Unknown boss: {boss}")
             continue
 
-        try:
-            respawn_time = datetime.strptime(time_str, "%I:%M %p").replace(
-                tzinfo=ph_tz,
-                year=datetime.now(ph_tz).year,
-                month=datetime.now(ph_tz).month,
-                day=datetime.now(ph_tz).day,
-            )
-        except ValueError:
+        respawn_time = None
+        for fmt in ["%I:%M %p", "%H:%M"]:
             try:
-                respawn_time = datetime.strptime(time_str, "%H:%M").replace(
-                    tzinfo=ph_tz,
-                    year=datetime.now(ph_tz).year,
-                    month=datetime.now(ph_tz).month,
-                    day=datetime.now(ph_tz).day,
-                )
+                t = datetime.strptime(time_str, fmt).time()
+                respawn_time = datetime.combine(current_date, t, tzinfo=ph_tz)
+                break
             except ValueError:
-                await ctx.send(f"⚠️ Invalid time: {time_str}")
                 continue
+
+        if not respawn_time:
+            await ctx.send(f"⚠️ Invalid time: {time_str}")
+            continue
 
         respawn_schedule[boss_name] = respawn_time.astimezone(timezone.utc)
         save_respawn_data()
