@@ -20,6 +20,9 @@ import calendar
 # Configuration
 # ------------------------------
 
+# Role to ping (set this in Railway as DISCORD_ROLE_ID)
+ROLE_ID = int(os.getenv("DISCORD_ROLE_ID", "0"))
+
 # Discord token (set on Railway as DISCORD_BOT_TOKEN)
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
@@ -238,38 +241,42 @@ def schedule_boss(boss: str, respawn_utc: datetime):
     asyncio.create_task(announce_boss(boss, respawn_utc))
 
 async def announce_boss(boss: str, respawn_utc: datetime):
-    """
-    Send pre-alert and final respawn messages to all active channels.
-    Pre-alert only (single interval configured by PRE_ALERT_MINUTES).
-    """
-    # ensure time is UTC-aware
     if respawn_utc.tzinfo is None:
         respawn_utc = respawn_utc.replace(tzinfo=pytz.UTC)
     now = datetime.utcnow().replace(tzinfo=pytz.UTC)
 
-    # pre-alert
+    # Build mention string
+    mention_str = "@everyone"
+    if ROLE_ID:
+        for ch in get_active_channel_objs():
+            role = ch.guild.get_role(ROLE_ID)
+            if role:
+                mention_str = role.mention
+                break
+
+    # Pre-alert
     alert_time = respawn_utc - timedelta(minutes=PRE_ALERT_MINUTES)
     wait = (alert_time - now).total_seconds()
     if wait > 0:
         await asyncio.sleep(wait)
         for ch in get_active_channel_objs():
             try:
-                await ch.send(f"⏳ @everyone **{boss.capitalize()} will respawn in {PRE_ALERT_MINUTES} minutes!** Get ready!")
+                await ch.send(f"⏳ {mention_str} **{boss.capitalize()} will respawn in {PRE_ALERT_MINUTES} minutes!** Get ready!")
             except Exception as e:
                 print(f"⚠️ Failed to send pre-alert to {ch.id}: {e}")
 
-    # final alert
+    # Final alert
     now = datetime.utcnow().replace(tzinfo=pytz.UTC)
     wait = (respawn_utc - now).total_seconds()
     if wait > 0:
         await asyncio.sleep(wait)
     for ch in get_active_channel_objs():
         try:
-            await ch.send(f"⚔️ @everyone **{boss.capitalize()} has respawned!** Go hunt!")
+            await ch.send(f"⚔️ {mention_str} **{boss.capitalize()} has respawned!** Go hunt!")
         except Exception as e:
             print(f"⚠️ Failed to send final alert to {ch.id}: {e}")
 
-    # cleanup saved schedule (boss no longer pending)
+    # Cleanup
     if boss in respawn_schedule:
         del respawn_schedule[boss]
         save_respawn_data()
