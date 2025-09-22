@@ -96,7 +96,7 @@ TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 BOSS_FILE = "bosses.json"
 SAVE_FILE = "respawn_data.json"
 # Supports multiple channel IDs separated by commas
-CHANNEL_IDS = os.getenv("DISCORD_CHANNEL_IDS", "")
+CHANNEL_IDS = os.getenv(1418170908039712810)
 CHANNEL_IDS = [int(cid.strip()) for cid in CHANNEL_IDS.split(",") if cid.strip()]
 
 
