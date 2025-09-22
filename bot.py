@@ -1,219 +1,284 @@
-# Imports
 import discord
 from discord.ext import commands
 import asyncio
 import json
 import os
-import re
+from datetime import datetime, timedelta, timezone
 import pytz
-from datetime import datetime, timedelta, date, timezone
-from zoneinfo import ZoneInfo
-
-# Timezone
-ph_tz = pytz.timezone("Asia/Manila")
+import re
 
 # ==============================
-# Helper Functions
-# ==============================
-def get_color(dt):
-    """Return a color based on how soon the respawn is."""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    now = datetime.utcnow().replace(tzinfo=timezone.utc)
-    delta = (dt - now).total_seconds()
-    if delta <= 0:
-        return 0x95a5a6  # gray
-    elif delta <= 600:  # 10 minutes
-        return 0xe74c3c  # red
-    elif delta <= 3600:  # 1 hour
-        return 0xf1c40f  # yellow
-    else:
-        return 0x2ecc71  # green
-
-def format_time(dt):
-    """Convert UTC datetime to PH time in 12h format."""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    ph_time = dt.astimezone(ph_tz)
-    return ph_time.strftime("%b %d, %I:%M %p")
-
-def format_countdown(dt):
-    """Return countdown like '2h 15m'."""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    now = datetime.utcnow().replace(tzinfo=timezone.utc)
-    delta = dt - now
-    if delta.total_seconds() <= 0:
-        return "⏳ Any moment now!"
-    hours, remainder = divmod(int(delta.total_seconds()), 3600)
-    minutes, _ = divmod(remainder, 60)
-    if hours > 0:
-        return f"{hours}h {minutes}m"
-    return f"{minutes}m"
-
-def parse_time_str(s: str):
-    """Parse time string like '17:00', '5:00 PM'."""
-    if not s:
-        return None
-    s_clean = s.strip().upper().replace(".", "")
-    try:
-        if "AM" in s_clean or "PM" in s_clean:
-            return datetime.strptime(s_clean, "%I:%M %p").time()
-        else:
-            return datetime.strptime(s_clean, "%H:%M").time()
-    except ValueError:
-        return None
-
-def find_boss(query: str):
-    """Resolve boss name by exact, partial, or case-insensitive match."""
-    query = query.lower()
-    # Exact match
-    if query in BOSSES:
-        return query
-    # Partial match
-    matches = [b for b in BOSSES if query in b.lower()]
-    if len(matches) == 1:
-        return matches[0]
-    return None
-
-def get_channels():
-    """Return a list of valid Discord channel objects with debug logging."""
-    channels = []
-    for cid in CHANNEL_IDS:
-        ch = bot.get_channel(cid)
-        if ch:
-            print(f"✅ Found channel: {cid} ({ch.guild.name} → #{ch.name})")
-            channels.append(ch)
-        else:
-            print(f"⚠️ Could not resolve channel ID: {cid}")
-    return channels
-
-
-# ==============================
-# Config Files
-# ==============================
-BOSS_FILE = "bosses.json"
-SAVE_FILE = "respawn_data.json"
-
-# ==============================
-# Discord Token & Channel Config
+# Config & Setup
 # ==============================
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
-# Try to load channel IDs from Railway environment variable
-raw_channel_ids = os.getenv("DISCORD_CHANNEL_IDS", "")
+# Multi-channel support: ENV var "DISCORD_CHANNEL_IDS" = comma-separated IDs
+CHANNEL_IDS = os.getenv("DISCORD_CHANNEL_IDS", "")
+CHANNEL_IDS = [int(cid.strip()) for cid in CHANNEL_IDS.split(",") if cid.strip().isdigit()]
 
-if raw_channel_ids:
-    # Split comma-separated IDs into a list of ints
-    CHANNEL_IDS = [int(cid.strip()) for cid in raw_channel_ids.split(",") if cid.strip()]
-    print(f"✅ Loaded channel IDs from Railway: {CHANNEL_IDS}")
-else:
-    # Fallback: hardcode channel IDs for local/debug
-    CHANNEL_IDS = [
-        1418187025873375272,  # Example channel 1
-        1418170908039712810   # Example channel 2
-    ]
-    print(f"⚠️ Using hardcoded fallback channel IDs: {CHANNEL_IDS}")
+# Active channels (configured + auto-discovered)
+active_channels = set(CHANNEL_IDS)
 
+# Philippines timezone
+ph_tz = pytz.timezone("Asia/Manila")
 
-
-# Load boss data
-with open(BOSS_FILE, "r") as f:
+# Load bosses.json
+with open("bosses.json", "r", encoding="utf-8") as f:
     BOSSES = json.load(f)
 
-# JSON persistence
-def load_respawn_data():
-    if os.path.exists(SAVE_FILE):
-        with open(SAVE_FILE, "r") as f:
-            data = json.load(f)
-            result = {}
-            for boss, t in data.items():
-                dt = datetime.fromisoformat(t)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                result[boss] = dt
-            return result
-    return {}
+# Respawn schedule memory
+respawn_schedule = {}
+DATA_FILE = "respawns.json"
+
+# Default pre-alert (minutes before respawn)
+PRE_ALERT_MINUTES = 10
+
+# ==============================
+# Helpers
+# ==============================
 
 def save_respawn_data():
-    with open(SAVE_FILE, "w") as f:
-        json.dump({boss: t.isoformat() for boss, t in respawn_schedule.items()}, f, indent=4)
+    """Save current respawn schedule to file."""
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump({b: t.isoformat() for b, t in respawn_schedule.items()}, f)
+
+def load_respawn_data():
+    """Load respawn schedule from file (if exists)."""
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+            for b, t in raw.items():
+                respawn_schedule[b] = datetime.fromisoformat(t)
+
+def format_countdown(respawn_time):
+    """Return countdown string like '2h 15m' or '⏳ Any moment now!'."""
+    now = datetime.utcnow().replace(tzinfo=timezone.utc)
+    diff = (respawn_time - now).total_seconds()
+    if diff <= 0:
+        return "⏳ Any moment now!"
+    mins = int(diff // 60)
+    hours, mins = divmod(mins, 60)
+    days, hours = divmod(hours, 24)
+    parts = []
+    if days: parts.append(f"{days}d")
+    if hours: parts.append(f"{hours}h")
+    if mins: parts.append(f"{mins}m")
+    return " ".join(parts)
+
+def find_boss(name: str):
+    """Case-insensitive + partial boss matching."""
+    name = name.lower()
+    matches = [b for b in BOSSES if name in b.lower()]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+def parse_time(time_str, base_date=None):
+    """Parse PH time string into datetime (UTC-aware)."""
+    if not base_date:
+        base_date = datetime.now(ph_tz).date()
+    try:
+        match = re.match(r"(\d{1,2}):(\d{2})(?:\s?(am|pm))?", time_str.lower())
+        if not match:
+            return None
+        hour, minute, ampm = match.groups()
+        hour, minute = int(hour), int(minute)
+        if ampm == "pm" and hour != 12:
+            hour += 12
+        if ampm == "am" and hour == 12:
+            hour = 0
+        dt = datetime.combine(base_date, datetime.min.time()) \
+             .replace(hour=hour, minute=minute, tzinfo=ph_tz)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
 
 # ==============================
-# Bot setup
+# Bot Setup
 # ==============================
+
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-respawn_schedule = load_respawn_data()
-PRE_ALERT_MINUTES = 10
-
 # ==============================
 # Events
 # ==============================
+
 @bot.event
 async def on_ready():
+    global active_channels
     print(f"✅ Logged in as {bot.user}")
+
+    # Auto-discover channels in each server if none are configured
+    if not CHANNEL_IDS:
+        for guild in bot.guilds:
+            for channel in guild.text_channels:
+                if channel.permissions_for(guild.me).send_messages:
+                    active_channels.add(channel.id)
+                    print(f"📡 Added channel {channel.name} ({channel.id}) from {guild.name}")
+                    break
+
+    # Resume scheduled bosses still pending
     now = datetime.utcnow().replace(tzinfo=timezone.utc)
     for boss, respawn_time in respawn_schedule.items():
         if respawn_time > now:
             schedule_boss(boss, respawn_time)
 
 # ==============================
-# Announcements
+# Announcer
 # ==============================
-async def announce_boss(boss, respawn_time):
-    for channel in get_channels():
-        return
 
-    # Pre-alert (10 minutes before)
+async def announce_boss(boss, respawn_time):
+    """
+    Announce boss respawns across all active channels.
+    - Sends one 10-minute warning
+    - Sends one respawn alert
+    """
+    # Pre-alert
     alert_time = respawn_time - timedelta(minutes=PRE_ALERT_MINUTES)
     wait_seconds = (alert_time - datetime.utcnow().replace(tzinfo=timezone.utc)).total_seconds()
     if wait_seconds > 0:
         await asyncio.sleep(wait_seconds)
-        await channel.send(f"⏳ @everyone **{boss.capitalize()} will respawn in {PRE_ALERT_MINUTES} minutes!** Get ready!")
+        for cid in active_channels:
+            channel = bot.get_channel(cid)
+            if channel:
+                await channel.send(f"⏳ @everyone **{boss.capitalize()} will respawn in {PRE_ALERT_MINUTES} minutes!** Get ready!")
 
     # Final alert
     wait_seconds = (respawn_time - datetime.utcnow().replace(tzinfo=timezone.utc)).total_seconds()
     if wait_seconds > 0:
         await asyncio.sleep(wait_seconds)
-    await channel.send(f"⚔️ @everyone **{boss.capitalize()} has respawned!** Go hunt!")
+    for cid in active_channels:
+        channel = bot.get_channel(cid)
+        if channel:
+            await channel.send(f"⚔️ @everyone **{boss.capitalize()} has respawned!** Go hunt!")
 
+    # Cleanup
     if boss in respawn_schedule:
         del respawn_schedule[boss]
         save_respawn_data()
 
 def schedule_boss(boss, respawn_time):
-    respawn_schedule[boss] = respawn_time
+    """Schedule announcement for a boss respawn."""
     asyncio.create_task(announce_boss(boss, respawn_time))
 
 # ==============================
 # Commands
 # ==============================
-@bot.command(name="testchannels")
-async def test_channels(ctx):
-    """
-    Sends a test message to all configured channels for debugging.
-    """
-    channels = get_channels()
-    if not channels:
-        await ctx.send("⚠️ No valid channels found.")
+
+@bot.command(name="dead")
+async def dead(ctx, boss_name: str, time_str: str = None):
+    """Mark a boss dead at a given time (default: now)."""
+    boss = find_boss(boss_name)
+    if not boss:
+        await ctx.send(f"❌ Unknown boss: {boss_name}")
         return
 
-    for channel in channels:
-        await channel.send(f"✅ Test message from bot in {channel.guild.name} → #{channel.name}")
-    
-    await ctx.send("📢 Test messages sent to all configured channels.")
+    killed_time = parse_time(time_str) if time_str else datetime.now(ph_tz).astimezone(timezone.utc)
+    if not killed_time:
+        await ctx.send("❌ Invalid time format. Use `HH:MM` or `HH:MM AM/PM`.")
+        return
+
+    interval = BOSSES[boss]["interval"]
+    if not interval:
+        await ctx.send(f"🗓️ {boss.capitalize()} has a fixed respawn schedule.")
+        return
+
+    respawn_time = killed_time + timedelta(hours=interval)
+    respawn_schedule[boss] = respawn_time
+    save_respawn_data()
+    schedule_boss(boss, respawn_time)
+
+    ph_time = respawn_time.astimezone(ph_tz).strftime("%I:%M %p").lstrip("0").lower()
+    await ctx.send(f"✅ {boss.capitalize()} respawn set → {ph_time} PH")
+
+@bot.command(name="deadat")
+async def deadat(ctx, *, bulk: str):
+    """Log multiple boss deaths at given times."""
+    lines = bulk.strip().splitlines()
+    results = []
+    base_date = datetime.now(ph_tz).date()
+
+    for line in lines:
+        if "-" not in line:
+            continue
+        time_str, boss_name = [s.strip() for s in line.split("-", 1)]
+        boss = find_boss(boss_name)
+        if not boss:
+            results.append(f"❌ Unknown boss: {boss_name}")
+            continue
+
+        killed_time = parse_time(time_str, base_date)
+        if not killed_time:
+            results.append(f"❌ Invalid time: {time_str}")
+            continue
+
+        interval = BOSSES[boss]["interval"]
+        if not interval:
+            results.append(f"🗓️ {boss.capitalize()} has a fixed respawn schedule.")
+            continue
+
+        respawn_time = killed_time + timedelta(hours=interval)
+        respawn_schedule[boss] = respawn_time
+        save_respawn_data()
+        schedule_boss(boss, respawn_time)
+        ph_time = respawn_time.astimezone(ph_tz).strftime("%I:%M %p").lstrip("0").lower()
+        results.append(f"✅ {boss.capitalize()} set → {ph_time} PH")
+
+    await ctx.send("\n".join(results))
+
+@bot.command(name="up")
+async def up(ctx, *, bulk: str):
+    """
+    Bulk set future respawn times.
+    Format (must include date line):
+    !up
+    September 22
+    1:15 am - Gareth
+    2:24 am - Ego
+    """
+    lines = bulk.strip().splitlines()
+    results = []
+    base_date = None
+
+    # First line must be date
+    if lines:
+        try:
+            base_date = datetime.strptime(lines[0], "%B %d").date()
+            lines = lines[1:]
+        except ValueError:
+            await ctx.send("❌ First line must be a date like 'September 22'")
+            return
+
+    for line in lines:
+        if "-" not in line:
+            continue
+        time_str, boss_name = [s.strip() for s in line.split("-", 1)]
+        boss = find_boss(boss_name)
+        if not boss:
+            results.append(f"❌ Unknown boss: {boss_name}")
+            continue
+
+        respawn_time = parse_time(time_str, base_date)
+        if not respawn_time:
+            results.append(f"❌ Invalid time: {time_str}")
+            continue
+
+        respawn_schedule[boss] = respawn_time
+        save_respawn_data()
+        schedule_boss(boss, respawn_time)
+        ph_time = respawn_time.astimezone(ph_tz).strftime("%I:%M %p").lstrip("0").lower()
+        results.append(f"✅ {boss.capitalize()} set → {ph_time} PH")
+
+    await ctx.send("\n".join(results))
 
 @bot.command(name="boss")
-async def boss(ctx, option: str = None):
-    """List respawn timers and fixed bosses."""
+async def boss_list(ctx, option: str = None):
+    """List respawn timers (soon or all)."""
     with_timers = []
-    fixed = []
-    noinfo = []
-
+    without_timers = []
     now = datetime.utcnow().replace(tzinfo=timezone.utc)
 
     for boss, data in BOSSES.items():
@@ -225,10 +290,7 @@ async def boss(ctx, option: str = None):
                 del respawn_schedule[boss]
                 save_respawn_data()
         else:
-            if data["schedule"]:
-                fixed.append((boss, data["schedule"]))
-            else:
-                noinfo.append(boss)
+            without_timers.append((boss, data))
 
     with_timers.sort(key=lambda x: x[1])
     if option and option.lower() == "soon":
@@ -243,197 +305,58 @@ async def boss(ctx, option: str = None):
         lines.append(f"**{ph_time.strftime('%I:%M %p').lstrip('0').lower()}** — {boss.capitalize()} *(in {countdown})*")
 
     if not option or option.lower() != "soon":
+        fixed, unknown = [], []
+        for boss, data in without_timers:
+            if data["schedule"]:
+                fixed.append(f"🗓️ {boss.capitalize()} — Fixed: {', '.join(data['schedule'])}")
+            else:
+                unknown.append(f"❌ {boss.capitalize()} — No respawn data")
         if fixed:
-            lines.append("\n**📌 Fixed Schedule Bosses:**")
-            for boss, sched in fixed:
-                lines.append(f"🗓️ {boss.capitalize()} — {', '.join(sched)}")
-        if noinfo:
-            lines.append("\n**❌ No Info Bosses:**")
-            for boss in noinfo:
-                lines.append(f"❌ {boss.capitalize()} — No respawn data")
+            lines.append("\n**📌 Fixed Bosses:**")
+            lines.extend(fixed)
+        if unknown:
+            lines.append("\n**❓ No Info Bosses:**")
+            lines.extend(unknown)
 
     await ctx.send("\n".join(lines))
 
 @bot.command(name="next")
-async def next_cmd(ctx, *, boss: str = None):
-    """Show next respawn time for a boss."""
+async def next_boss(ctx, boss_name: str):
+    """Show next respawn time for a specific boss."""
+    boss = find_boss(boss_name)
     if not boss:
-        await ctx.send("❌ Please provide a boss name.")
+        await ctx.send(f"❌ Unknown boss: {boss_name}")
         return
-
-    boss_key = find_boss(boss)
-    if not boss_key:
-        await ctx.send(f"❌ Unknown boss: {boss}")
+    if boss not in respawn_schedule:
+        await ctx.send(f"❌ {boss.capitalize()} has no respawn data.")
         return
+    respawn_time = respawn_schedule[boss]
+    ph_time = respawn_time.astimezone(ph_tz).strftime("%I:%M %p").lstrip("0").lower()
+    countdown = format_countdown(respawn_time)
+    await ctx.send(f"**{boss.capitalize()}** respawns at **{ph_time} PH** *(in {countdown})*")
 
-    if boss_key in respawn_schedule:
-        respawn_time = respawn_schedule[boss_key]
-        countdown = format_countdown(respawn_time)
-        await ctx.send(f"⏳ **{boss_key.capitalize()}** respawns at {format_time(respawn_time)} PH (in {countdown})")
-    elif BOSSES[boss_key]["schedule"]:
-        schedule = ", ".join(BOSSES[boss_key]["schedule"])
-        await ctx.send(f"📅 **{boss_key.capitalize()}** spawns on schedule: {schedule}")
-    else:
-        await ctx.send(f"❌ No respawn info for **{boss_key.capitalize()}**")
-
-# ==============================
-# Dead & DeadAt Commands
-# ==============================
-@bot.command(name="dead")
-async def dead(ctx, *, args: str = None):
-    """Mark a boss dead (single)."""
-    if not args:
-        await ctx.send("❌ Usage: !dead <boss> [time]")
+@bot.command(name="setprealert")
+async def setprealert(ctx, minutes: int):
+    """Set pre-alert notification time before boss respawns."""
+    global PRE_ALERT_MINUTES
+    if minutes <= 0:
+        await ctx.send("❌ Minutes must be positive.")
         return
+    PRE_ALERT_MINUTES = minutes
+    await ctx.send(f"✅ Pre-alert set to {minutes} minutes before respawn.")
 
-    parts = args.strip().split(maxsplit=1)
-    boss_raw = parts[0]
-    boss_key = find_boss(boss_raw)
-    if not boss_key:
-        await ctx.send(f"❌ Unknown boss: {boss_raw}")
-        return
-
-    if BOSSES[boss_key].get("schedule"):
-        await ctx.send(f"🗓️ **{boss_key.capitalize()}** is fixed-schedule: {', '.join(BOSSES[boss_key]['schedule'])}")
-        return
-
-    # Default = now (PH time)
-    killed_ph = datetime.now(ph_tz)
-
-    # If time is provided, override today's PH date
-    if len(parts) > 1:
-        time_str = parts[1]
-        time_obj = parse_time_str(time_str)
-        if not time_obj:
-            await ctx.send(f"⚠️ Could not parse time: {time_str}")
-            return
-        killed_ph = ph_tz.localize(datetime.combine(date.today(), time_obj))
-
-    # Calculate respawn
-    interval = BOSSES[boss_key]["interval"]
-    respawn_ph = killed_ph + timedelta(hours=interval)
-    respawn_utc = respawn_ph.astimezone(pytz.UTC)
-
-    # Save & schedule
-    respawn_schedule[boss_key] = respawn_utc
-    save_respawn_data()
-    schedule_boss(boss_key, respawn_utc)
-
-    await ctx.send(
-        f"✅ {boss_key.capitalize()} dead at {killed_ph.strftime('%I:%M %p PH')} "
-        f"→ Respawns at {respawn_ph.strftime('%I:%M %p PH')}"
-    )
-
-@bot.command(name="deadat")
-async def deadat(ctx, *, args: str = None):
-    """Log boss deaths (bulk)."""
-    if not args:
-        await ctx.send("❌ Usage: !deadat <bulk input>")
-        return
-
-    lines = args.strip().splitlines()
-    ph_now = datetime.now(ph_tz)
-    current_date = ph_now.date()
-    results = []
-
-    for line in lines:
-        try:
-            parsed_date = datetime.strptime(line.title(), "%B %d").date()
-            current_date = parsed_date.replace(year=ph_now.year)
-            results.append(f"📅 Using date: {current_date}")
-            continue
-        except ValueError:
-            pass
-
-        m = re.match(r"^([0-9]{1,2}:[0-9]{2}\s*(?:AM|PM|am|pm)?)\s*-\s*(.+)$", line)
-        if not m:
-            results.append(f"⚠️ Could not parse line: {line}")
-            continue
-
-        time_str, boss_raw = m.groups()
-        boss_key = find_boss(boss_raw)
-        if not boss_key:
-            results.append(f"❌ Unknown boss: {boss_raw}")
-            continue
-
-        if BOSSES[boss_key].get("schedule"):
-            results.append(f"🗓️ **{boss_key.capitalize()}** is fixed-schedule: {', '.join(BOSSES[boss_key]['schedule'])}")
-            continue
-
-        time_obj = parse_time_str(time_str)
-        killed_ph = ph_tz.localize(datetime.combine(current_date, time_obj))
-        interval = BOSSES[boss_key]["interval"]
-        respawn_ph = killed_ph + timedelta(hours=interval)
-        respawn_utc = respawn_ph.astimezone(pytz.UTC)
-
-        respawn_schedule[boss_key] = respawn_utc
-        save_respawn_data()
-        schedule_boss(boss_key, respawn_utc)
-
-        results.append(f"✅ {boss_key.capitalize()} logged → Respawns at {respawn_ph.strftime('%Y-%m-%d %I:%M %p PH')}")
-
-    await ctx.send("\n".join(results))
-
-# ==============================
-# Up Command
-# ==============================
-@bot.command(name="up")
-async def up(ctx, *, args: str = None):
-    """Set spawn times (bulk)."""
-    if not args:
-        await ctx.send("❌ Usage: !up <bulk input>")
-        return
-
-    lines = args.strip().splitlines()
-    ph_now = datetime.now(ph_tz)
-    current_date = ph_now.date()
-    results = []
-
-    for line in lines:
-        try:
-            parsed_date = datetime.strptime(line.title(), "%B %d").date()
-            current_date = parsed_date.replace(year=ph_now.year)
-            results.append(f"📅 Using date: {current_date}")
-            continue
-        except ValueError:
-            pass
-
-        m = re.match(r"^([0-9]{1,2}:[0-9]{2}\s*(?:AM|PM|am|pm)?)\s*-\s*(.+)$", line)
-        if not m:
-            results.append(f"⚠️ Could not parse line: {line}")
-            continue
-
-        time_str, boss_raw = m.groups()
-        boss_key = find_boss(boss_raw)
-        if not boss_key:
-            results.append(f"❌ Unknown boss: {boss_raw}")
-            continue
-
-        time_obj = parse_time_str(time_str)
-        ph_dt = ph_tz.localize(datetime.combine(current_date, time_obj))
-        respawn_utc = ph_dt.astimezone(pytz.UTC)
-
-        respawn_schedule[boss_key] = respawn_utc
-        save_respawn_data()
-        schedule_boss(boss_key, respawn_utc)
-
-        results.append(f"✅ {boss_key.capitalize()} set → {ph_dt.strftime('%Y-%m-%d %I:%M %p PH')}")
-
-    await ctx.send("\n".join(results))
-
-# ==============================
-# Commands List
-# ==============================
 @bot.command(name="commands")
 async def commands_list(ctx):
-    """List all available commands."""
+    """Show all available commands."""
     cmds = [
-        ("!boss [soon]", "Show respawn timers (or next 5 with 'soon')"),
-        ("!next <boss>", "Show next respawn time for a boss"),
-        ("!dead <boss> [time]", "Log a boss death (PH time)"),
-        ("!deadat <bulk>", "Log multiple boss deaths (bulk input)"),
-        ("!up <bulk>", "Set spawn times manually (bulk input)"),
-        ("!commands", "Show this help list")
+        ("!dead <boss> [time]", "Mark a boss dead (uses PH time). Time optional."),
+        ("!deadat <bulk input>", "Log one or multiple boss deaths at specific PH times."),
+        ("!up <date + bulk input>", "Set next spawn times for one or multiple bosses. Date required."),
+        ("!boss [soon]", "Show respawn timers. 'soon' shows next 5 respawns only."),
+        ("!next <boss>", "Show next respawn time and countdown for a specific boss."),
+        ("!setprealert <minutes>", "Set pre-alert notification time before boss respawns."),
+        ("!commands", "Show this commands list."),
+        ("!testchannels", "Check which channels the bot can send to."),
     ]
     longest = max(len(c[0]) for c in cmds)
     lines = ["**⚔️ LordNine Bot Commands — Usage**\n"]
@@ -441,7 +364,25 @@ async def commands_list(ctx):
         lines.append(f"`{cmd.ljust(longest)}` - {desc}")
     await ctx.send("\n".join(lines))
 
+@bot.command(name="testchannels")
+async def testchannels(ctx):
+    """Debug which channels bot can send to."""
+    ok, fail = [], []
+    for cid in active_channels:
+        channel = bot.get_channel(cid)
+        if channel:
+            try:
+                await channel.send("✅ Test message")
+                ok.append(f"{channel.guild.name} → {channel.name}")
+            except Exception:
+                fail.append(str(cid))
+        else:
+            fail.append(str(cid))
+    await ctx.send(f"✅ OK: {', '.join(ok)} | ❌ Fail: {', '.join(fail)}")
+
 # ==============================
-# Run Bot
+# Startup
 # ==============================
+
+load_respawn_data()
 bot.run(TOKEN)
