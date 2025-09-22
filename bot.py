@@ -77,10 +77,9 @@ def find_boss(query: str):
     return None
 
 def get_channels():
-    """Return a list of valid Discord channel objects with logging for debug."""
-    raw_ids = CHANNEL_IDS
+    """Return a list of valid Discord channel objects with debug logging."""
     channels = []
-    for cid in raw_ids:
+    for cid in CHANNEL_IDS:
         ch = bot.get_channel(cid)
         if ch:
             print(f"✅ Found channel: {cid} ({ch.guild.name} → #{ch.name})")
@@ -89,15 +88,34 @@ def get_channels():
             print(f"⚠️ Could not resolve channel ID: {cid}")
     return channels
 
+
 # ==============================
-# Config
+# Config Files
 # ==============================
-TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 BOSS_FILE = "bosses.json"
 SAVE_FILE = "respawn_data.json"
-# Supports multiple channel IDs separated by commas
-CHANNEL_IDS = os.getenv(1418170908039712810)
-CHANNEL_IDS = [int(cid.strip()) for cid in CHANNEL_IDS.split(",") if cid.strip()]
+
+# ==============================
+# Discord Token & Channel Config
+# ==============================
+
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+
+# Try to load channel IDs from Railway environment variable
+raw_channel_ids = os.getenv("DISCORD_CHANNEL_IDS", "")
+
+if raw_channel_ids:
+    # Split comma-separated IDs into a list of ints
+    CHANNEL_IDS = [int(cid.strip()) for cid in raw_channel_ids.split(",") if cid.strip()]
+    print(f"✅ Loaded channel IDs from Railway: {CHANNEL_IDS}")
+else:
+    # Fallback: hardcode channel IDs for local/debug
+    CHANNEL_IDS = [
+        1418187025873375272,  # Example channel 1
+        1418170908039712810   # Example channel 2
+    ]
+    print(f"⚠️ Using hardcoded fallback channel IDs: {CHANNEL_IDS}")
+
 
 
 # Load boss data
