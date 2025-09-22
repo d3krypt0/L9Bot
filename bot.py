@@ -76,13 +76,21 @@ def find_boss(query: str):
         return matches[0]
     return None
 
+def get_channels():
+    """Return a list of valid Discord channel objects."""
+    channels = [bot.get_channel(cid) for cid in CHANNEL_IDS]
+    return [ch for ch in channels if ch]  # filter out None
+
 # ==============================
 # Config
 # ==============================
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 BOSS_FILE = "bosses.json"
 SAVE_FILE = "respawn_data.json"
+# Supports multiple channel IDs separated by commas
+CHANNEL_IDS = os.getenv("DISCORD_CHANNEL_IDS", "")
+CHANNEL_IDS = [int(cid.strip()) for cid in CHANNEL_IDS.split(",") if cid.strip()]
+
 
 # Load boss data
 with open(BOSS_FILE, "r") as f:
@@ -131,8 +139,7 @@ async def on_ready():
 # Announcements
 # ==============================
 async def announce_boss(boss, respawn_time):
-    channel = bot.get_channel(CHANNEL_ID)
-    if not channel:
+    for channel in get_channels():
         return
 
     # Pre-alert (10 minutes before)
