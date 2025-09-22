@@ -178,30 +178,40 @@ def get_active_channel_objs():
     return chans
 
 def get_next_fixed_schedule(boss, schedules):
-    """Return the next datetime for a fixed-schedule boss in PH timezone."""
+    """
+    Given a list of fixed schedules (like ["Monday 11:30", "Thursday 19:00"]),
+    return the next upcoming datetime in UTC, calculated in PH timezone.
+    """
     now = datetime.now(ph_tz)
     upcoming_times = []
 
     for sched in schedules:
-        # Example: "Monday 11:30"
-        day_str, time_str = sched.split()
-        target_day = list(calendar.day_name).index(day_str)
-        target_time = datetime.strptime(time_str, "%H:%M").time()
+        try:
+            # Example sched: "Monday 11:30"
+            day_str, time_str = sched.split()
+            target_day = list(calendar.day_name).index(day_str)  # Monday=0, Sunday=6
+            target_time = datetime.strptime(time_str, "%H:%M").time()
 
-        # Start from today
-        candidate = now.replace(hour=target_time.hour, minute=target_time.minute, second=0, microsecond=0)
+            # Start from today's date with target time
+            candidate = now.replace(hour=target_time.hour, minute=target_time.minute,
+                                    second=0, microsecond=0)
 
-        # Roll forward to the correct weekday
-        days_ahead = (target_day - candidate.weekday()) % 7
-        candidate = candidate + timedelta(days=days_ahead)
+            # Calculate days ahead to match the target weekday
+            days_ahead = (target_day - candidate.weekday()) % 7
+            candidate = candidate + timedelta(days=days_ahead)
 
-        # If time already passed today, push to next week
-        if candidate <= now:
-            candidate = candidate + timedelta(days=7)
+            # If the time already passed today, roll forward one week
+            if candidate <= now:
+                candidate = candidate + timedelta(days=7)
 
-        upcoming_times.append(candidate)
+            upcoming_times.append(candidate)
+        except Exception as e:
+            print(f"⚠️ Error parsing schedule for {boss}: {sched} ({e})")
 
-    # Return the soonest upcoming schedule
+    if not upcoming_times:
+        return None
+
+    # Return the soonest upcoming time converted to UTC
     return min(upcoming_times).astimezone(pytz.UTC)
 
 # ------------------------------
