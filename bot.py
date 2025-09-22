@@ -78,8 +78,16 @@ def find_boss(query: str):
 
 def get_channels():
     """Return a list of valid Discord channel objects."""
-    channels = [bot.get_channel(cid) for cid in CHANNEL_IDS]
-    return [ch for ch in channels if ch]  # filter out None
+    raw_ids = CHANNEL_IDS
+    channels = []
+    for cid in raw_ids:
+        ch = bot.get_channel(cid)
+        if ch:
+            print(f"✅ Found channel: {cid} ({ch.guild.name} → #{ch.name})")
+            channels.append(ch)
+        else:
+            print(f"⚠️ Could not resolve channel ID: {cid}")
+    return channels
 
 # ==============================
 # Config
